@@ -5,23 +5,23 @@
 
 int myFunction(int, int);
 
-/*浼犳劅鍣ㄥ搴斿紩鑴氬拰AD鍊肩殑瀹氫箟*/
-#define Sersor_Pin_Temp 12 //娓╁害浼犳劅鍣ㄧ殑AO寮曡剼鎺sp32鐨?2鍙峰紩鑴?
-#define Sersor_Pin_Humi 13 //婀垮害浼犳劅鍣ㄧ殑AO寮曡剼鎺sp32鐨?3鍙峰紩鑴?
+/*传感器对应引脚和AD值的定义*/
+#define Sersor_Pin_Temp 12 //温度传感器的AO引脚接Esp32的12号引脚
+#define Sersor_Pin_Humi 13 //湿度传感器的AO引脚接Esp32的13号引脚
 int SersorValue_Temp;
 int SersorValue_Humi; 
 int Timer_Value = 0;
 
-/*wifi鍚嶇О浠ュ強瀵嗙爜*/
+/*wifi名称以及密码*/
 const char *Wifi_Name = "Redmi K50";
 const char *Wifi_Passward = "xxy031205";
 
-/*mqtt鐨勬湇鍔″櫒鍦板潃浠ュ強绔彛鍙? 浠ュ強esp32瀹㈡埛绔渶璁㈤槄鐨勪富棰樺悕*/
+/*mqtt的服务器地址以及端口号, 以及esp32客户端需订阅的主题名*/
 const char *Mqtt_ServerAddress = "mqtt.rymcu.com";
 const uint16_t Mqtt_Com = 8883;
 const char *R_Topic = "Order_esp32_112233";
 
-/*閰嶇疆CA璇佷功*/
+/*配置CA证书*/
 const char *ca_cert = \
 "-----BEGIN CERTIFICATE-----\n" \
 "MIIDrzCCApegAwIBAgIQCDvgVpBCRrGhdWrJWZHHSjANBgkqhkiG9w0BAQUFADBh\n" \
@@ -51,11 +51,11 @@ PubSubClient Mqtt_Client(Wifi_Client);
 
 void Mqtt_Connect();
 void WiFi_Connect();
-int Value_Filter(int i); //璇诲彇涓€杩炰覆SersorValue鍙栦腑鍊?
-void Timer_Init(); //瀹氭椂鍣ㄥ垵濮嬪寲
-void IRAM_ATTR Ontime(); //瀹氭椂鍣ㄤ腑鏂嚱鏁?
-void Report_Data();//鏁版嵁涓婃姤鑷砿qtt鏈嶅姟绔?
-void Receive(char *Topic, byte *Payload, unsigned int Length);//鍥炶皟鍑芥暟
+int Value_Filter(int i); //读取一连串SersorValue取中值
+void Timer_Init(); //定时器初始化
+void IRAM_ATTR Ontime(); //定时器中断函数
+void Report_Data();//数据上报至mqtt服务端
+void Receive(char *Topic, byte *Payload, unsigned int Length);//回调函数
 
 void setup() 
 {
@@ -67,14 +67,14 @@ void setup()
   
   Timer_Init();
   
-  //杩炴帴wifi
+  //连接wifi
   WiFi_Connect();
-  //杩炴帴mqtt鏈嶅姟鍣?骞惰缃甊eceive浣滀负鍥炶皟鍑芥暟
+  //连接mqtt服务器,并设置Receive作为回调函数
   Mqtt_Client.setServer(Mqtt_ServerAddress, 8883);
   Mqtt_Connect();
   Mqtt_Client.setCallback(Receive);
   
-  //閰嶇疆Seror_Pin涓烘ā鎷熻緭鍏ュ紩鑴氾紝骞惰缃墍鏈堿D1閫氶亾琛板噺鍊间负鏈€澶?
+  //配置Seror_Pin为模拟输入引脚，并设置所有AD1通道衰减值为最大
   pinMode(Sersor_Pin_Temp, INPUT);
   pinMode(Sersor_Pin_Humi, INPUT);
   analogSetAttenuation(ADC_ATTENDB_MAX);
@@ -84,7 +84,7 @@ void setup()
 
 void loop() 
 {
-  //璇诲彇浼犳劅鍣ㄦ暟鎹?
+  //读取传感器数据
   SersorValue_Temp = Value_Filter(Sersor_Pin_Temp);
   Serial.print("Get SersorValue_Temp : ");
   Serial.println(SersorValue_Temp);
@@ -95,7 +95,7 @@ void loop()
 
   Serial.print("....");
   
-  //姣?0s杩涜涓€娆℃暟鎹笂鎶?
+  //每20s进行一次数据上报
   if (Timer_Value >= 2) 
   {
     Report_Data();    
@@ -111,13 +111,13 @@ int myFunction(int x, int y) {
   return x + y;
 }
 
-//杩炴帴mqtt鏈嶅姟绔苟璁㈤槄涓婚
+//连接mqtt服务端并订阅主题
 void Mqtt_Connect()
 {
   
   String clientId = "esp32-" + WiFi.macAddress();
   
-  // 杩炴帴MQTT鏈嶅姟鍣?
+  // 连接MQTT服务器
   if (Mqtt_Client.connect(clientId.c_str())) 
   { 
     Serial.println("MQTT Server Connected.");
@@ -135,7 +135,7 @@ void Mqtt_Connect()
   }   
 }
 
-//Wifi杩炴帴
+//Wifi连接
 void WiFi_Connect()
 {
   WiFi.begin(Wifi_Name, Wifi_Passward);
@@ -150,7 +150,7 @@ void WiFi_Connect()
   Serial.println("Wifi Connected");  
 }
 
-//瀵硅鍙栫殑浼犳劅鍣ˋD鍊艰繘琛屼腑鍊兼护娉?
+//对读取的传感器AD值进行中值滤波
 int Value_Filter(int Sersor_Pin)
 {
  int Value[9] = {0};
@@ -179,12 +179,12 @@ int Value_Filter(int Sersor_Pin)
 
 hw_timer_t* timer= NULL; 
 
-void IRAM_ATTR Ontime()//姣忕瑙﹀彂涓€娆℃鍑芥暟
+void IRAM_ATTR Ontime()//每秒触发一次此函数
 {
   Timer_Value++;
 }
 
-//鍒濆鍖栧畾鏃跺櫒
+//初始化定时器
 void Timer_Init()
 {
   timer = timerBegin(0, 800, true);
@@ -193,7 +193,7 @@ void Timer_Init()
   timerAlarmEnable(timer);
 }
 
-//杩炴帴Mqtt骞朵笂鎶ユ暟鎹?
+//连接Mqtt并上报数据
 void Report_Data()
 {
   if (Mqtt_Client.connected())
